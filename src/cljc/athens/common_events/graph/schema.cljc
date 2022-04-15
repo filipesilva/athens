@@ -30,18 +30,24 @@
 
 ;; Block
 
+(def child-relation
+  [:relation
+   [:or
+    [:enum
+     :first
+     :last]
+    [:map
+     [:name string?]]]])
+
+
 (def child-position
   [:or
    [:map
     page-id
-    [:relation [:enum
-                :first
-                :last]]]
+    child-relation]
    [:map
     block-id
-    [:relation [:enum
-                :first
-                :last]]]])
+    child-relation]])
 
 
 (def sibling-position
