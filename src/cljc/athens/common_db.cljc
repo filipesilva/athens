@@ -15,7 +15,7 @@
        [athens.common.sentry :as sentry-m :refer [wrap-span wrap-span-no-new-tx]])))
 
 
-(def schema
+(def v1-schema
   {:schema/version      {}
    :block/uid           {:db/unique :db.unique/identity}
    :node/title          {:db/unique :db.unique/identity}
@@ -26,6 +26,79 @@
                          :db/valueType   :db.type/ref}
    ;; TODO: do we really still use it?
    :block/remote-id     {:db/unique :db.unique/identity}})
+
+
+(def v2-schema
+  {:block/parent      {:db/cardinality :db.cardinality/one
+                       :db/valueType   :db.type/ref}
+   :block/name-refs   {:db/cardinality :db.cardinality/many
+                       :db/valueType   :db.type/ref}
+   ;; tupleAttrs are used here to ensure the parent relationship is unique.
+   ;; https://github.com/tonsky/datascript/blob/master/docs/tuples.md
+   :block/parent+name {:db/tupleAttrs [:block/parent :block/name]
+                       :db/unique     :db.unique/identity}})
+
+
+(def schema (merge v1-schema v2-schema))
+
+
+(comment
+  (def conn (d/create-conn schema))
+
+  (d/transact! conn [{:block/uid "123"}])
+
+  ;; Insert with parent.
+  (d/transact! conn [{:block/uid    "456"
+                      :name/string  "n1"
+                      :block/parent [:block/uid "123"]}])
+
+  ;; Insert as child.
+  (d/transact! conn [{:block/uid    "123"
+                      :block/_parent {:block/uid "789"
+                                      :name/string "n2"}}])
+
+  ;; Won't go through, same parent+child
+  (d/transact! conn [{:block/uid    "000"
+                      :name/string  "n1"
+                      :block/parent [:block/uid "123"]}])
+
+  (->> (d/datoms @conn :eavt)
+       (map first)
+       set
+       (d/pull-many @conn '[*]))
+  ;; => [{:db/id 1, :block/uid "123"}
+  ;;     {:db/id 3,
+  ;;      :block/parent #:db{:id 1},
+  ;;      :block/parent+name [1 "n2"],
+  ;;      :block/uid "789",
+  ;;      :name/string "n2"}
+  ;;     {:db/id 2,
+  ;;      :block/parent #:db{:id 1},
+  ;;      :block/parent+name [1 "n1"],
+  ;;      :block/uid "456",
+  ;;      :name/string "n1"}]
+
+  (d/pull @conn '[*] [:block/parent+name [1 "n2"]])
+  ;; => {:db/id 3,
+  ;;     :block/parent #:db{:id 1},
+  ;;     :block/parent+name [1 "n2"],
+  ;;     :block/uid "789",
+  ;;     :name/string "n2"}
+
+  (d/pull @conn '[{:block/_parent [*]}] 1)
+  ;; => #:block{:_parent
+  ;;            [{:db/id 2,
+  ;;              :block/parent #:db{:id 1},
+  ;;              :block/parent+name [1 "n1"],
+  ;;              :block/uid "456",
+  ;;              :name/string "n1"}
+  ;;             {:db/id 3,
+  ;;              :block/parent #:db{:id 1},
+  ;;              :block/parent+name [1 "n2"],
+  ;;              :block/uid "789",
+  ;;              :name/string "n2"}]}
+
+  )
 
 
 (def empty-db (d/empty-db schema))
