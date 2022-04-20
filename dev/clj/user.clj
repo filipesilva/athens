@@ -3,4 +3,8 @@
 
 (ns user
   (:require
-    [com.stuartsierra.component.user-helpers :refer [dev go reset]]))
+    [com.stuartsierra.component.user-helpers :refer [dev go reset]]
+    [hyperfiddle.rcf]))
+
+
+(hyperfiddle.rcf/enable!)
