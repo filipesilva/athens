@@ -1,4 +1,4 @@
-{:paths ["src/clj" "src/cljs" "src/cljc" "src/js" "src/gen" "test"]
+{:paths [:app-paths :dev-paths]
 
  :deps
  {org.clojure/clojure                   #:mvn{:version "1.11.1"}
@@ -48,16 +48,23 @@
   cider/cider-nrepl                     #:mvn{:version "0.27.2"}}
 
  :aliases
- {:carve
+ {:app-paths ["src/clj" "src/cljs" "src/cljc" "src/js" "src/gen"]
+  :dev-paths ["dev/clj" "test" "dev/notebooks"]
+  :carve
   {:extra-deps {borkdude/carve
                 #:git{:url "https://github.com/borkdude/carve"
                       :sha "7d87e7fdf471121b4f3cc4b442e6ca39503ca07e"}}
+   :replace-paths []
    :main-opts  ["-m" "carve.main"]}
 
   :cljstyle
   {:deps      {mvxcvi/cljstyle
                #:git{:url "https://github.com/greglook/cljstyle.git"
                      :sha "14c18e5b593c39bc59f10df1b894c31a0020dc49"}}
+   ;; TODO: consider using all these as tools, that way paths and deps aren't
+   ;; used by default.
+   ;; https://clojure.org/reference/deps_and_cli#_aliased_tool_execution
+   :replace-paths []
    :main-opts ["-m" "cljstyle.main"]}
 
   :clj-kondo
@@ -65,11 +72,13 @@
                 #:git{:url "https://github.com/borkdude/clj-kondo"
                       :sha "8937af7f4372c0d2264735ebc1439d0b61030872"
                       :tag "v2022.03.09"}}
+   :replace-paths []
    :main-opts  ["-m" "clj-kondo.main"]}
 
   :outdated
   {:extra-deps {com.github.liquidz/antq
                 #:mvn{:version "1.1.0"}}
+   :replace-paths []
    ;; Very noisy, due to https://github.com/liquidz/antq/issues/108
    :main-opts  ["-m" "antq.core"]}
 
@@ -85,29 +94,23 @@
    :extra-paths ["classes"]}
 
   :test
-  {:extra-paths ["dev/clj"]
-   :extra-deps  {io.github.cognitect-labs/test-runner
+  {:extra-deps  {io.github.cognitect-labs/test-runner
                  {:git/url "https://github.com/cognitect-labs/test-runner.git"
                   :sha     "48c3c67f98362ba1e20526db4eeb6996209c050a"
                   :git/tag "v0.5.0"}}
    :main-opts   ["-m" "cognitect.test-runner"]
-   :exec-fn     cognitect.test-runner.api/test}
-
-  :repl
-  {:extra-paths ["dev/clj"]}
+   :exec-fn     cognitect.test-runner.api/test
+   :exec-args   {:dirs ["test" "src"]
+                 :patterns [".*"]}}
 
   :athens
-  {:extra-paths ["dev/clj"]
-   :main-opts   ["-m" "athens.self-hosted.core"]}
+  {:main-opts   ["-m" "athens.self-hosted.core"]}
 
   :athens-cli
-  {:extra-paths ["dev/clj"]
-   :main-opts   ["-m" "athens.self-hosted.save-load"]}
+  {:main-opts   ["-m" "athens.self-hosted.save-load"]}
 
   :notebooks
-  {:extra-paths ["dev/clj" "dev/notebooks"]
-   :main-opts   ["-m" "notebooks"]}
+  {:main-opts   ["-m" "notebooks"]}
 
   :notebooks-static
-  {:extra-paths ["dev/clj" "dev/notebooks"]
-   :exec-fn notebooks/build-static-app!}}}
+  {:exec-fn notebooks/build-static-app!}}}
