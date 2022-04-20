@@ -4,7 +4,13 @@
     [athens.common-events.resolver.order :as order]))
 
 
-(defn insert-ordered-child-tx
+(defn position-type
+  [{:keys [relation]}]
+  (cond (#{:last :first :before :after} relation) :order
+        (:name relation)                          :name))
+
+
+(defn add-ordered-child-tx
   [db uid position now]
   (let [{:keys [relation]}   position
         [ref-uid parent-uid] (common-db/position->uid+parent db position)
@@ -50,3 +56,28 @@
                                   :block/children [{:block/uid uid}]
                                   :edit/time      now}]]
     (concat reorder-origin reorder-destination update-parent)))
+
+
+(defn add-named-child-tx
+  [db uid position now]
+  (let [name           (-> position :relation :name)
+        [_ parent-uid] (common-db/position->uid+parent db position)
+        add-child      {:block/uid    uid
+                        :block/name   name
+                        :block/parent {:block/uid parent-uid
+                                       :edit/time now}}]
+    [add-child]))
+
+
+(defn remove-named-child-tx
+  [db uid position now]
+  (let [name           (-> position :relation :name)
+        [_ parent-uid] (common-db/position->uid+parent db position)
+        remove-name    [[:db/retract [:block/uid uid] :block/name name]
+                        [:db/retract [:block/uid uid] :block/parent [:block/uid parent-uid]]]
+        update-times   [{:block/uid uid
+                         :edit/time now}
+                        {:block/uid parent-uid
+                         :edit/time now}]]
+    (concat remove-name update-times)))
+

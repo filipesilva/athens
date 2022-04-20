@@ -22,11 +22,13 @@
   (let [{:block/keys [uid position]} args
         now                          (utils/now-ts)
         new-block                    {:block/uid    uid
-                                      :block/string ""
+                                      :block/string "" ; TODO: allow empty
                                       :block/open   true
                                       :create/time  now
                                       :edit/time    now}
-        children-tx                  (children/insert-ordered-child-tx db uid position now)
+        children-tx                  (condp = (children/position-type position)
+                                       :order (children/add-ordered-child-tx db uid position now)
+                                       :name  (children/add-named-child-tx db uid position now))
         tx-data                      (into [new-block] children-tx)]
     tx-data))
 
@@ -67,14 +69,34 @@
         [_ new-parent-uid]           (common-db/position->uid+parent db position)
         {old-parent-uid :block/uid}  (common-db/get-parent db [:block/uid uid])
         same-parent?                 (= new-parent-uid old-parent-uid)
+        old-position-type            (-> (common-db/get-position db uid)
+                                         children/position-type)
+        new-position-type            (children/position-type position)
         now                          (utils/now-ts)
         updated-block'               {:block/uid uid
                                       :edit/time now}
-        children-tx                  (if same-parent?
-                                       (children/move-ordered-child-within-tx
-                                        db old-parent-uid uid position)
-                                       (children/move-ordered-child-between-tx
-                                        db old-parent-uid new-parent-uid uid position now))]
+        children-tx                  (condp = [old-position-type new-position-type]
+                                       [:order :order]
+                                       (if same-parent?
+                                         (children/move-ordered-child-within-tx
+                                           db old-parent-uid uid position)
+                                         (children/move-ordered-child-between-tx
+                                           db old-parent-uid new-parent-uid uid position now))
+
+                                       [:order :name]
+                                       (concat
+                                         (children/remove-ordered-child-tx db uid old-parent-uid)
+                                         (children/add-named-child-tx db uid position now))
+
+                                       [:name :order]
+                                       (concat
+                                         (children/remove-named-child-tx db uid position now)
+                                         (children/add-ordered-child-tx db uid position now))
+
+                                       [:name :name]
+                                       ;; No need to remove previous name, schema ensures
+                                       ;; a block has a single name.
+                                       (children/add-named-child-tx db uid position now))]
     (into [updated-block'] children-tx)))
 
 
@@ -94,7 +116,7 @@
                                 (common-db/get-parent-eid db [:block/uid uid]))
         parent-uid            (when parent-eid
                                 (common-db/v-by-ea db parent-eid :block/uid))
-        children-tx               (children/remove-ordered-child-tx db uid parent-uid)
+        children-tx           (children/remove-ordered-child-tx db uid parent-uid)
         has-kids?             (seq children)
         descendants-uids      (when has-kids?
                                 (loop [acc        []
@@ -104,7 +126,9 @@
                                           c-block (common-db/get-block db [:block/uid c-uid])]
                                       (recur (conj acc c-uid)
                                              (apply conj (rest to-look-at)
-                                                    (:block/children c-block))))
+                                                    (concat
+                                                      (:block/children c-block)
+                                                      (:block/_parent c-block)))))
                                     acc)))
         all-uids-to-remove    (conj (set descendants-uids) uid)
         uid->refs             (->> all-uids-to-remove

@@ -32,6 +32,9 @@
 (def v2-schema
   {:block/parent      {:db/cardinality :db.cardinality/one
                        :db/valueType   :db.type/ref}
+   ;; TODO: what's an easier model?
+   ;; - blocks have attributes, each attribute is name+block
+   ;; - blocks have named-children, each named-child is name+block
    :block/name-refs   {:db/cardinality :db.cardinality/many
                        :db/valueType   :db.type/ref}
    ;; tupleAttrs are used here to ensure the parent relationship is unique.
@@ -256,6 +259,10 @@
                  :block/open
                  :block/refs
                  :block/_refs
+                 :block/name
+                 :block/name-refs
+                 :block/_name-refs
+                 :block/parent
                  {:block/children [:block/uid
                                    :block/order]}]
             eid)))
@@ -271,6 +278,8 @@
                  :page/sidebar
                  :block/refs
                  :block/_refs
+                 :block/_name-refs
+                 {:block/_parent [:block/uid]}
                  {:block/children [:block/uid
                                    :block/order]}]
             eid)))
@@ -303,6 +312,18 @@
          :block/children
          (sort-by :block/order)
          (mapv :block/uid))))
+
+
+(defn get-named-children
+  [db eid]
+  (when (d/entity db eid)
+    (->> (d/pull db '[{:block/_parent [:block/uid
+                                       :block/name]}]
+                 eid)
+         :block/_parent
+         (map (fn [{:block/keys [name] :as b}]
+                [name b]))
+         (into {}))))
 
 
 (defn prev-sib
@@ -596,18 +617,20 @@
   Position will be athens.common-events.graph.schema/child-position for the first block,
   and athens.common-events.graph.schema/sibling-position for others."
   [db block-uid]
-  (let [{:block/keys [order]
+  (let [{:block/keys [order name]
          :db/keys    [id]} (get-block db [:block/uid block-uid])
         parent-uid         (->> id (get-parent db) :block/uid)
         position           (compat-position db {:block/uid parent-uid
-                                                :relation  order})]
+                                                :relation  (or order {:name name})})]
     position))
 
 
 (defn validate-position
-  [db {:keys [block/uid page/title] :as position}]
+  [db {:keys [relation block/uid page/title] :as position}]
   (let [title->uid (get-page-uid db title)
-        uid->title (get-page-title db uid)]
+        uid->title (get-page-title db uid)
+        name       (:name relation)
+        names      (->> [:block/uid (or uid title->uid)] (get-named-children db) keys set)]
     ;; Fail on error conditions.
     (when-some [fail-msg (cond
                            (and uid uid->title)
@@ -615,10 +638,14 @@
 
                            ;; TODO: this could be idempotent instead and create the page.
                            (and title (not title->uid))
-                           (str "Location title does not exist:" title)
+                           (str "Location title does not exist: " title)
 
                            (and uid (not (e-by-av db :block/uid uid)))
-                           (str "Location uid does not exist:" uid))]
+                           (str "Location uid does not exist: " uid)
+
+                           ;; TODO: this could be idempotent and instead overwrite the name.
+                           (and name (names name))
+                           (str "Location already contains name: " name))]
       (throw (ex-info fail-msg position)))))
 
 
@@ -628,7 +655,8 @@
   (validate-position db position)
   (let [;; Pages must be referenced by title but internally we still use uids for them.
         uid                     (or uid (get-page-uid db title))
-        {parent-uid :block/uid} (if (#{:first :last} relation)
+        {parent-uid :block/uid} (if (or (#{:first :last} relation)
+                                        (:name relation))
                                   ;; We already know the blocks exists because of validate-position
                                   (get-block db [:block/uid uid])
                                   (if-let [parent (get-parent db [:block/uid uid])]
