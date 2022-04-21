@@ -42,6 +42,7 @@
                        :db/unique     :db.unique/identity}})
 
 
+;; TODO: can't do this, need to generalize and use athens.self-hosted.migrate
 (def schema (merge v1-schema v2-schema))
 
 
