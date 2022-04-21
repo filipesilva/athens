@@ -782,6 +782,7 @@
       (update-refs-tx lookup-ref before after))))
 
 
+;; TODO: needs to find refs in names too, after initial prototyping
 (defn linkmaker
   "Maintains the linked nature of Knowledge Graph.
 
