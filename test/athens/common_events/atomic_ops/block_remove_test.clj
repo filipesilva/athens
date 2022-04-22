@@ -500,6 +500,9 @@
                    (:block/string child-1))))))))
 
 
+;; TODO: add named children test before prototyping is finished
+;;
+
 (t/deftest undo
   (let [test-uid   "test-uid"
         setup-repr [{:page/title     "test-page"

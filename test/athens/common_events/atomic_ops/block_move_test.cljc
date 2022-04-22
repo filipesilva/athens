@@ -527,6 +527,9 @@
       (fixture/teardown! setup-repr))))
 
 
+;; TODO: add named children tests after prototyping, cover all combo cases
+
+
 (t/deftest undo
   (let [block-0-uid     "block-0-uid"
         block-1-uid     "block-1-uid"
