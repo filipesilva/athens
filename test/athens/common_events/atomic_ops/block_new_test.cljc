@@ -281,6 +281,63 @@
                 (atomic-resolver/resolve-atomic-op-to-tx @@fixture/connection block-new-v2-op)))))))
 
 
+(t/deftest rel-name
+  (let [parent-uid   "parent"
+        order-0-uid  "order-0"
+        name         "foo"
+        name-foo-uid "name-foo"
+        setup-txs    [{:block/uid      parent-uid
+                       :block/string   ""
+                       :block/order    0
+                       :block/children [{:block/uid    order-0-uid
+                                         :block/string ""
+                                         :block/order  0}]}]]
+    (fixture/transact-with-middleware setup-txs)
+    (->> {:block/uid parent-uid
+          :relation  {:name name}}
+         (atomic-graph-ops/make-block-new-op name-foo-uid)
+         (atomic-resolver/resolve-atomic-op-to-tx @@fixture/connection)
+         (d/transact! @fixture/connection))
+
+    (let [parent   (common-db/get-block @@fixture/connection [:block/uid parent-uid])
+          order-0  (common-db/get-block @@fixture/connection [:block/uid order-0-uid])
+          name-foo (common-db/get-block @@fixture/connection [:block/uid name-foo-uid])]
+      (t/is (= nil (-> name-foo :block/order)))
+      (t/is (= name (-> name-foo :block/name)))
+      ;; Normal children are unnaffected.
+      (t/is (= 1 (-> parent :block/children count)))
+      (t/is (= 0 (-> order-0 :block/order))))))
+
+
+(t/deftest rel-name-repeat
+  (let [parent-uid     "parent"
+        name           "foo"
+        first-foo-uid  "first-foo"
+        second-foo-uid "second-foo"
+        setup-txs      [{:block/uid    parent-uid
+                         :block/string ""
+                         :block/order  0}]]
+    (fixture/transact-with-middleware setup-txs)
+
+    ;; First one goes through.
+    (->> {:block/uid parent-uid
+          :relation  {:name name}}
+         (atomic-graph-ops/make-block-new-op first-foo-uid)
+         (atomic-resolver/resolve-atomic-op-to-tx @@fixture/connection)
+         (d/transact! @fixture/connection))
+
+    ;; Second one errors.
+    (t/is (thrown-with-msg? #?(:cljs js/Error
+                               :clj ExceptionInfo)
+                            #"Location already contains name"
+
+            (->> {:block/uid parent-uid
+                  :relation  {:name name}}
+                 (atomic-graph-ops/make-block-new-op second-foo-uid)
+                 (atomic-resolver/resolve-atomic-op-to-tx @@fixture/connection)
+                 (d/transact! @fixture/connection))))))
+
+
 (t/deftest undo
   (let [test-uid     "test-uid"
         new-test-uid "test-new-uid"

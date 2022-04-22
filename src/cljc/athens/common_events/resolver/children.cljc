@@ -1,0 +1,83 @@
+(ns athens.common-events.resolver.children
+  (:require
+    [athens.common-db :as common-db]
+    [athens.common-events.resolver.order :as order]))
+
+
+(defn position-type
+  [{:keys [relation]}]
+  (cond (#{:last :first :before :after} relation) :order
+        (:name relation)                          :name))
+
+
+(defn add-ordered-child-tx
+  [db uid position now]
+  (let [{:keys [relation]}   position
+        [ref-uid parent-uid] (common-db/position->uid+parent db position)
+        children             (common-db/get-children-uids db [:block/uid parent-uid])
+        children'            (order/insert children uid relation ref-uid)
+        reorder              (order/reorder children children' order/block-map-fn)
+        add-child            {:block/uid      parent-uid
+                              :block/children [{:block/uid uid}]
+                              :edit/time      now}]
+    (concat [add-child] reorder)))
+
+
+(defn remove-ordered-child-tx
+  [db uid parent-uid]
+  (let [parent-children  (common-db/get-children-uids db [:block/uid parent-uid])
+        parent-children' (order/remove parent-children uid)
+        reorder          (order/reorder parent-children parent-children' order/block-map-fn)]
+    reorder))
+
+
+(defn move-ordered-child-within-tx
+  [db old-parent-uid uid position]
+  (let [{:keys [relation]} position
+        [ref-uid]          (common-db/position->uid+parent db position)
+        children           (common-db/get-children-uids db [:block/uid old-parent-uid])
+        children'          (order/move-within children uid relation ref-uid)
+        reorder            (order/reorder children children' order/block-map-fn)]
+    reorder))
+
+
+(defn move-ordered-child-between-tx
+  [db old-parent-uid new-parent-uid uid position now]
+  (let [{:keys [relation]}      position
+        [ref-uid]               (common-db/position->uid+parent db position)
+        origin-children         (common-db/get-children-uids db [:block/uid old-parent-uid])
+        destination-children    (common-db/get-children-uids db [:block/uid new-parent-uid])
+        [origin-children'
+         destination-children'] (order/move-between origin-children destination-children uid relation ref-uid)
+        reorder-origin          (order/reorder origin-children origin-children' order/block-map-fn)
+        reorder-destination     (order/reorder destination-children destination-children' order/block-map-fn)
+        update-parent           [[:db/retract [:block/uid old-parent-uid] :block/children [:block/uid uid]]
+                                 {:block/uid      new-parent-uid
+                                  :block/children [{:block/uid uid}]
+                                  :edit/time      now}]]
+    (concat reorder-origin reorder-destination update-parent)))
+
+
+(defn add-named-child-tx
+  [db uid position now]
+  (let [name           (-> position :relation :name)
+        [_ parent-uid] (common-db/position->uid+parent db position)
+        add-child      {:block/uid    uid
+                        :block/name   name
+                        :block/parent {:block/uid parent-uid
+                                       :edit/time now}}]
+    [add-child]))
+
+
+(defn remove-named-child-tx
+  [db uid position now]
+  (let [name           (-> position :relation :name)
+        [_ parent-uid] (common-db/position->uid+parent db position)
+        remove-name    [[:db/retract [:block/uid uid] :block/name name]
+                        [:db/retract [:block/uid uid] :block/parent [:block/uid parent-uid]]]
+        update-times   [{:block/uid uid
+                         :edit/time now}
+                        {:block/uid parent-uid
+                         :edit/time now}]]
+    (concat remove-name update-times)))
+

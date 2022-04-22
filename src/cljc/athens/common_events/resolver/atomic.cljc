@@ -1,14 +1,15 @@
 (ns athens.common-events.resolver.atomic
   (:require
-    [athens.common-db                    :as common-db]
-    [athens.common-events.graph.ops      :as graph-ops]
-    [athens.common-events.resolver.order :as order]
-    [athens.common.logging               :as log]
-    [athens.common.utils                 :as utils]
-    [athens.dates                        :as dates]
-    [clojure.pprint                      :as pp]
-    [clojure.string                      :as s]
-    [datascript.core                     :as d]))
+    [athens.common-db                       :as common-db]
+    [athens.common-events.graph.ops         :as graph-ops]
+    [athens.common-events.resolver.children :as children]
+    [athens.common-events.resolver.order    :as order]
+    [athens.common.logging                  :as log]
+    [athens.common.utils                    :as utils]
+    [athens.dates                           :as dates]
+    [clojure.pprint                         :as pp]
+    [clojure.string                         :as s]
+    [datascript.core                        :as d]))
 
 
 (defmulti resolve-atomic-op-to-tx
@@ -19,21 +20,16 @@
 (defmethod resolve-atomic-op-to-tx :block/new
   [db {:op/keys [args]}]
   (let [{:block/keys [uid position]} args
-        {:keys [relation]}           position
-        [ref-uid parent-uid]         (common-db/position->uid+parent db position)
         now                          (utils/now-ts)
         new-block                    {:block/uid    uid
-                                      :block/string ""
+                                      :block/string "" ; TODO: allow empty
                                       :block/open   true
                                       :create/time  now
                                       :edit/time    now}
-        children                     (common-db/get-children-uids db [:block/uid parent-uid])
-        children'                    (order/insert children uid relation ref-uid)
-        reorder                      (order/reorder children children' order/block-map-fn)
-        children-tx                  (concat [new-block] reorder)
-        tx-data                      [{:block/uid      parent-uid
-                                       :block/children children-tx
-                                       :edit/time      now}]]
+        children-tx                  (condp = (children/position-type position)
+                                       :order (children/add-ordered-child-tx db uid position now)
+                                       :name  (children/add-named-child-tx db uid position now))
+        tx-data                      (into [new-block] children-tx)]
     tx-data))
 
 
@@ -70,33 +66,38 @@
   (let [{:block/keys [uid position]} args
         _valid-block-uid             (when (common-db/get-page-title db uid)
                                        (throw (ex-info "Block to be moved is a page, cannot move pages." args)))
-        {:keys [relation]}           position
-        [ref-uid new-parent-uid]     (common-db/position->uid+parent db position)
+        [_ new-parent-uid]           (common-db/position->uid+parent db position)
         {old-parent-uid :block/uid}  (common-db/get-parent db [:block/uid uid])
         same-parent?                 (= new-parent-uid old-parent-uid)
+        old-position-type            (-> (common-db/get-position db uid)
+                                         children/position-type)
+        new-position-type            (children/position-type position)
         now                          (utils/now-ts)
-        updated-block'               (if same-parent?
-                                       [{:block/uid uid
-                                         :edit/time now}]
-                                       [[:db/retract [:block/uid old-parent-uid] :block/children [:block/uid uid]]
-                                        {:block/uid      new-parent-uid
-                                         :block/children [{:block/uid uid
-                                                           :edit/time now}]
-                                         :edit/time      now}])
-        reorder                      (if same-parent?
-                                       (let [children  (common-db/get-children-uids db [:block/uid old-parent-uid])
-                                             children' (order/move-within children uid relation ref-uid)
-                                             reorder   (order/reorder children children' order/block-map-fn)]
-                                         reorder)
+        updated-block'               {:block/uid uid
+                                      :edit/time now}
+        children-tx                  (condp = [old-position-type new-position-type]
+                                       [:order :order]
+                                       (if same-parent?
+                                         (children/move-ordered-child-within-tx
+                                           db old-parent-uid uid position)
+                                         (children/move-ordered-child-between-tx
+                                           db old-parent-uid new-parent-uid uid position now))
 
-                                       (let [origin-children         (common-db/get-children-uids db [:block/uid old-parent-uid])
-                                             destination-children    (common-db/get-children-uids db [:block/uid new-parent-uid])
-                                             [origin-children'
-                                              destination-children'] (order/move-between origin-children destination-children uid relation ref-uid)
-                                             reorder-origin          (order/reorder origin-children origin-children' order/block-map-fn)
-                                             reorder-destination     (order/reorder destination-children destination-children' order/block-map-fn)]
-                                         (concat reorder-origin reorder-destination)))]
-    (into updated-block' reorder)))
+                                       [:order :name]
+                                       (concat
+                                         (children/remove-ordered-child-tx db uid old-parent-uid)
+                                         (children/add-named-child-tx db uid position now))
+
+                                       [:name :order]
+                                       (concat
+                                         (children/remove-named-child-tx db uid position now)
+                                         (children/add-ordered-child-tx db uid position now))
+
+                                       [:name :name]
+                                       ;; No need to remove previous name, schema ensures
+                                       ;; a block has a single name.
+                                       (children/add-named-child-tx db uid position now))]
+    (into [updated-block'] children-tx)))
 
 
 (defmethod resolve-atomic-op-to-tx :block/remove
@@ -115,9 +116,7 @@
                                 (common-db/get-parent-eid db [:block/uid uid]))
         parent-uid            (when parent-eid
                                 (common-db/v-by-ea db parent-eid :block/uid))
-        parent-children       (common-db/get-children-uids db [:block/uid parent-uid])
-        parent-children'      (order/remove parent-children uid)
-        reorder               (order/reorder parent-children parent-children' order/block-map-fn)
+        children-tx           (children/remove-ordered-child-tx db uid parent-uid)
         has-kids?             (seq children)
         descendants-uids      (when has-kids?
                                 (loop [acc        []
@@ -127,7 +126,9 @@
                                           c-block (common-db/get-block db [:block/uid c-uid])]
                                       (recur (conj acc c-uid)
                                              (apply conj (rest to-look-at)
-                                                    (:block/children c-block))))
+                                                    (concat
+                                                      (:block/children c-block)
+                                                      (:block/_parent c-block)))))
                                     acc)))
         all-uids-to-remove    (conj (set descendants-uids) uid)
         uid->refs             (->> all-uids-to-remove
@@ -174,7 +175,7 @@
         txs                   (when block-exists?
                                 (cond-> []
                                   parent-uid   (conj retract-parents-child)
-                                  reorder      (into reorder)
+                                  children-tx  (into children-tx)
                                   has-kids?    (into retract-kids)
                                   has-asserts? (into asserts)
                                   true         (conj retract-entity)))]
@@ -189,7 +190,7 @@
     txs))
 
 
-(defmethod resolve-atomic-op-to-tx :comment/add
+#_(defmethod resolve-atomic-op-to-tx :comment/add
   [db {:op/keys [args]}]
   (let [uid                 (:block/uid args)
         new-comment         (:new-comment args)

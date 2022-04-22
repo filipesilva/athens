@@ -31,18 +31,24 @@
 
 ;; Block
 
+(def child-relation
+  [:relation
+   [:or
+    [:enum
+     :first
+     :last]
+    [:map
+     [:name string?]]]])
+
+
 (def child-position
   [:or
    [:map
     page-id
-    [:relation [:enum
-                :first
-                :last]]]
+    child-relation]
    [:map
     block-id
-    [:relation [:enum
-                :first
-                :last]]]])
+    child-relation]])
 
 
 (def sibling-position
@@ -98,7 +104,7 @@
      [:block/position block-position]]]])
 
 
-(def op-new-comment
+#_(def op-new-comment
   [:map
    [:op/args
      [:map
@@ -208,7 +214,7 @@
                      [:shortcut/new    (with-common op-shortcut-new)]
                      [:shortcut/remove (with-common op-shortcut-remove)]
                      [:shortcut/move   (with-common op-shortcut-move)]
-                     [:comment/add     (with-common op-new-comment)]
+                     ;;[:comment/add     (with-common op-new-comment)]
                      [:composite/consequence [:ref ::composite-op]]]
      ::composite-op [:map
                      [:op/type [:enum :composite/consequence]]
