@@ -17,8 +17,7 @@
     [goog.dom.selection          :refer [setCursorPosition]]
     [malli.core                  :as m]
     [malli.error                 :as me]
-    [re-frame.core               :as rf]
-    [stylefy.core                :as stylefy]))
+    [re-frame.core               :as rf]))
 
 
 ;; Effects
@@ -134,12 +133,6 @@
 
 
 (rf/reg-fx
-  :stylefy/tag
-  (fn [[tag properties]]
-    (stylefy/tag tag properties)))
-
-
-(rf/reg-fx
   :alert/js!
   (fn [message]
     (js/alert message)))
@@ -217,7 +210,10 @@
       ;; valid event let's send it
       (do
         (log/debug "Sending event:" (pr-str event))
-        (client/send! event))
+        (let [ret (client/send! event)]
+          (when (= :rejected (:result ret))
+            (rf/dispatch [:remote/reject-forwarded-event event])
+            (log/warn "Tried to send invalid event. Error:" (pr-str (:reason ret))))))
       (let [explanation (-> schema/event
                             (m/explain event)
                             (me/humanize))]

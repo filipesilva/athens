@@ -1,9 +1,7 @@
 (ns athens.views.comments.right-side
-  (:require [stylefy.core :as stylefy]
-            [athens.views.textinput :as textinput]
-            ["/components/Button/Button" :refer [Button]]
-            ["/components/Input/Input" :refer [Input]]
+  (:require ["@chakra-ui/react" :refer [Button Input]]
             [re-frame.core :as rf]
+            [athens.parse-renderer]
             [athens.views.blocks.textarea-keydown :as textarea-keydown])
   (:import
     (goog.events
@@ -30,7 +28,7 @@
     (fn [uid]
       (let [username @(rf/subscribe [:username])]
         [:div
-         [textinput/textinput {:placeholder "Add a comment..." :style {:width "95%"
+         [Input               {:placeholder "Add a comment..." :style {:width "95%"
                                                                        :margin-left "9px"}
                                :on-change (fn [e] (reset! comment-string (.. e -target -value)))
                                :value @comment-string
@@ -49,11 +47,11 @@
 
 (defn right-side-comments
   [data uid]
-  [:div.comments (stylefy/use-style right-side-comments-styles)
+  [:div.comments {:style right-side-comments-styles}
    (for [item data]
      [:<>
-      [:div.comment (stylefy/use-style comments-styles)
-       [:span (stylefy/use-style {:margin "0 0 0 5px"})
+      [:div.comment {:style comments-styles}
+       [:span {:style {:margin "0 0 0 5px"}}
         [athens.parse-renderer/parse-and-render (:string item) uid] ]]
       (when (not= item (last data))
         [:hr {:style {:margin 0}}])])

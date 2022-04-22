@@ -4,6 +4,7 @@
     [athens.common-db                     :as common-db]
     [athens.common-events.graph.atomic    :as atomic]
     [athens.common-events.graph.composite :as composite]
+    [athens.parser.structure              :as structure]
     [clojure.set                          :as set]))
 
 
@@ -173,3 +174,73 @@
                                                             children? (conj move-children-op)
                                                             children? (conj close-new-block-op)))]
     split-block-op))
+
+
+(defn ops->new-page-titles
+  "Reduces Graph Ops into a set of titles of newly created pages."
+  [ops]
+  (let [page-new-ops (contains-op? ops :page/new)
+        new-titles   (->> page-new-ops
+                          (map :op/args)
+                          (map :page/title)
+                          set)]
+    new-titles))
+
+
+(defn ops->new-block-uids
+  "Reduces Graph Ops into a set of block/uids of newly created blocks."
+  [ops]
+  (let [block-new-ops (contains-op? ops :block/new)
+        new-uids      (->> block-new-ops
+                           (map :op/args)
+                           (map :block/new)
+                           set)]
+    new-uids))
+
+
+(defn structural-diff
+  "Calculates removed and added links (block refs & page links)"
+  [db ops]
+  (let [block-save-ops       (contains-op? ops :block/save)
+        page-new-ops         (contains-op? ops :page/new)
+        page-rename-ops      (contains-op? ops :page/rename)
+        new-blocks           (->> block-save-ops
+                                  (map #(select-keys (:op/args %)
+                                                     [:block/uid :block/string])))
+        new-block-uids       (->> new-blocks
+                                  (map :block/uid)
+                                  set)
+        new-page-titles      (->> (concat page-new-ops page-rename-ops)
+                                  (map #(or (get-in (:op/args %) [:target :page/title])
+                                            (get-in (:op/args %) [:page/title]))))
+        old-page-titles      (->> page-rename-ops
+                                  (map :page/title)
+                                  set)
+        new-block-structures (->> new-blocks
+                                  (map :block/string)
+                                  (map structure/structure-parser->ast))
+        new-title-structures (->> new-page-titles
+                                  (map structure/structure-parser->ast))
+        old-block-strings    (->> new-block-uids
+                                  (map #(common-db/get-block-string db %)))
+        old-title-structures (->> old-page-titles
+                                  (map structure/structure-parser->ast))
+        old-structures       (->> old-block-strings
+                                  (map structure/structure-parser->ast))
+        links                (fn [structs names renames]
+                               (->> structs
+                                    (mapcat (partial tree-seq vector? identity))
+                                    (filter #(and (vector? %)
+                                                  (contains? names (first %))))
+                                    (map #(vector (get renames (first %) (first %))
+                                                  (-> % second :string)))
+                                    set))
+        old-links            (links (concat old-structures old-title-structures)
+                                    #{:page-link :hashtag :block-ref}
+                                    {:hashtag :page-link})
+        new-links            (links (concat new-block-structures new-title-structures)
+                                    #{:page-link :hashtag :block-ref}
+                                    {:hashtag :page-link})
+        removed-links        (set/difference old-links new-links)
+        added-links          (set/difference new-links old-links)]
+    [removed-links added-links]))

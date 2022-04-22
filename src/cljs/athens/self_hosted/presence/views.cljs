@@ -1,16 +1,17 @@
 (ns athens.self-hosted.presence.views
   (:require
-    ["/components/Avatar/Avatar" :refer [Avatar]]
     ["/components/PresenceDetails/PresenceDetails" :refer [PresenceDetails]]
+    ["@chakra-ui/react" :refer [Avatar AvatarGroup Tooltip]]
+    [athens.electron.utils :as electron.utils]
+    [athens.router :as router]
     [athens.self-hosted.presence.events]
     [athens.self-hosted.presence.fx]
     [athens.self-hosted.presence.subs]
     [athens.util :as util]
+    [clojure.string :as str]
     [re-frame.core :as rf]
     [reagent.core :as r]))
 
-
-;; Avatar
 
 (defn user->person
   [{:keys [session-id username color]
@@ -25,8 +26,19 @@
 (defn copy-host-address-to-clipboard
   [host-address]
   (.. js/navigator -clipboard (writeText host-address))
-  (rf/dispatch [:show-snack-msg {:msg "Host address copied to clipboard"
-                                 :type :success}]))
+  (util/toast (clj->js {:status "info"
+                        :position "top-right"
+                        :title "Host address copied to clipboard"})))
+
+
+(defn copy-permalink
+  []
+  (let [selected-db @(rf/subscribe [:db-picker/selected-db])
+        url (router/create-url-with-graph-param (:id selected-db))]
+    (.. js/navigator -clipboard (writeText url))
+    (util/toast (clj->js {:status "info"
+                          :position "top-right"
+                          :title "Copied permalink to clipboard"}))))
 
 
 (defn go-to-user-block
@@ -36,11 +48,12 @@
         (->> (js->clj js-person :keywordize-keys true)
              :personId
              (get all-users))]
-    (rf/dispatch (if page-uid
-                   ;; TODO: if we support navigating to a block, it should be added here.
-                   [:navigate :page {:id page-uid}]
-                   [:show-snack-msg {:msg "User is not on any page"
-                                     :type :success}]))))
+    (if page-uid
+      ;; TODO: if we support navigating to a block, it should be added here.
+      (rf/dispatch [:navigate :page {:id page-uid}])
+      (util/toast (clj->js {:title "User is not on any page"
+                            :position "top-right"
+                            :status "warning"})))))
 
 
 (defn edit-current-user
@@ -74,15 +87,18 @@
                 (let [current-user'          (user->person @current-user)
                       current-page-members   (others-seq @same-page)
                       different-page-members (others-seq @diff-page)]
-                  [:> PresenceDetails {:current-user              current-user'
-                                       :current-page-members      current-page-members
-                                       :different-page-members    different-page-members
-                                       :host-address              (:url @selected-db)
-                                       :handle-copy-host-address copy-host-address-to-clipboard
-                                       :handle-press-member       #(go-to-user-block @all-users %)
-                                       :handle-update-profile     #(edit-current-user % current-user')
-                                       ;; TODO: show other states when we support them.
-                                       :connection-status         "connected"}]))))
+                  [:> PresenceDetails (merge
+                                        {:current-user             current-user'
+                                         :current-page-members     current-page-members
+                                         :different-page-members   different-page-members
+                                         :host-address             (:url @selected-db)
+                                         :handle-copy-host-address copy-host-address-to-clipboard
+                                         :handle-press-member      #(go-to-user-block @all-users %)
+                                         :handle-update-profile    #(edit-current-user % current-user')
+                                         ;; TODO: show other states when we support them.
+                                         :connection-status        "connected"}
+                                        (when-not electron.utils/electron?
+                                          {:handle-copy-permalink copy-permalink}))]))))
 
 
 ;; inline
@@ -92,20 +108,20 @@
   (let [users (rf/subscribe [:presence/has-presence (util/embed-uid->original-uid uid)])]
     (when (seq @users)
       (into
-        [:> (.-Stack Avatar)
-         {:size "1.25rem"
-          :maskSize "1.5px"
-          :stackOrder "from-left"
-          :limit 3
-          :style {:zIndex 100
-                  :position "absolute"
-                  :right "-1.5rem"
-                  :top "0.25rem"
-                  :padding "0.125rem"
-                  :background "var(--background-color)"}}]
-        (->> @users
-             (map user->person)
-             (remove nil?)
-             (map (fn [{:keys [personId] :as person}]
-                    [:> Avatar (merge {:showTooltip false :key personId} person)])))))))
+        [:> Tooltip {:label (->> @users (map user->person)
+                                 (remove nil?)
+                                 (map (fn [person] (:username person)))
+                                 (str/join ", "))}
+         [:> AvatarGroup {:max 1
+                          :zIndex 2
+                          :size "xs"
+                          :cursor "default"
+                          :gridArea "presence"}
+          (->> @users
+               (map user->person)
+               (remove nil?)
+               (map (fn [{:keys [personId] :as person}]
+                      [:> Avatar {:key personId
+                                  :bg (:color person)
+                                  :name (:username person)}])))]]))))
 
