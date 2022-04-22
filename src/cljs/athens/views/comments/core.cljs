@@ -82,7 +82,8 @@
           notif-ops                 (bot/create-notifs-ops db block author bot/athens-users comment-block-uid)
           active-comment-ops        (composite/make-consequence-op {:op/type :active-comments-op}
                                                                    (concat [comment-add-op]
-                                                                           notif-ops))
+                                                                           ;; disabled while testing locally
+                                                                          #_ notif-ops))
 
           event                     (common-events/build-atomic-event active-comment-ops)]
       {:fx [[:dispatch [:resolve-transact-forward event]]
