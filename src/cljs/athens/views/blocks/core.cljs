@@ -324,7 +324,6 @@
                            string
                            open
                            children
-                           comment
                            _refs]} (merge (reactive/get-reactive-block-document ident) block)
              children-uids         (set (map :block/uid children))
              uid-sanitized-block   (s/transform
@@ -337,7 +336,8 @@
              selected-items       @(rf/subscribe [::select-subs/items])
              present-user          @(rf/subscribe [:presence/has-presence uid])
              is-presence           (seq present-user)
-             current-page          @(rf/subscribe [:current-route/page-title])]
+             current-page          @(rf/subscribe [:current-route/page-title])
+             has-comments?         (comments/has-comments? @db/dsdb uid)]
 
          ;; (prn uid is-selected)
 
@@ -436,11 +436,13 @@
           ;; Show comments only when the toggle for them is on
           ;; show inline comments
           (when (and @(rf/subscribe [:comment/show-inline-comments?])
-                     comment)
-            [inline-comments/inline-comments comment uid true])
+                     has-comments?)
+            (let [thread-uid (comments/get-comment-thread-uid @db/dsdb uid)
+                  comments   (comments/get-thread-comments @db/dsdb thread-uid)]
+              [inline-comments/inline-comments comments uid true]))
 
           ;; right side comments
-          (when (and @(rf/subscribe [:comment/show-right-side-comments?])
+          #_(when (and @(rf/subscribe [:comment/show-right-side-comments?])
                      comment)
             [right-side/right-side-comments comment uid])
 

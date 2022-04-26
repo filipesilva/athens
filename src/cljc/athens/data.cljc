@@ -15,6 +15,7 @@
 ;; Make this the new location, remove duplicated code, and wire things together.
 
 
+
 ;; test helpers
 
 (defn- db-with
@@ -33,6 +34,21 @@
 
 
 ;; athens data -> atomic ops
+
+(defn- add-missing-block-uids
+  [athens-data]
+  (walk/postwalk
+      (fn [x]
+        (if (and (map? x)
+                 (not (:block/uid x))
+                 (not (:page/title x))
+                 (or (:block/string x)
+                     (:block/children x)
+                     (:block/named-children x)))
+          (assoc x :block/uid (utils/gen-block-uid))
+          x))
+      athens-data))
+
 
 (defn- enhance-block
   [block previous parent]
@@ -58,7 +74,7 @@
 
 (defn- enhance-named-children
   [named-children parent]
-  (update-vals named-children (fn [v] (assoc v :parent parent))))
+  (into {} (map (fn [[k v]] [k (assoc v :parent parent :block/name k)])) named-children))
 
 
 (defn- enhance-data
@@ -134,6 +150,7 @@
   :block/save operations are grouped at the end so that any ref'd entities are already created."
   [db athens-data default-position]
   (->> athens-data
+       add-missing-block-uids
        enhance-data
        (mapcat (partial tree-seq has-children? get-all-children))
        (map (partial enhanced-data->atomic-ops db default-position))
@@ -143,57 +160,94 @@
 
 
 ;; TODO: support shortcuts
-;; TODO: separate blocks from pages
 ;; TODO: require default-position for blocks
-;; TODO: maybe using default-position makes it a partial? it should show up somewhere
+;; TODO: how should default-position work for named children?
+;;       Might need a different model.
+;;       Maybe make relation optional, don't add that block, default to last for children.
 (defn data->ops
-  [{:athens/keys [pages blocks blocks-location sidebar] :as _athens-data} & {:keys [db]}]
+  [{:athens/keys [pages blocks position sidebar] :as _athens-data} & {:keys [db]}]
   ;; TODO: should work without db at all, but some graph ops need it even if empty.
   ;; TODO: resolvers should be ok with recreating a page, should not stop processing
   ;; whole op, otherwise this always needs the db.
   (let [db' (or db (d/empty-db common-db/schema))]
-    ;; TODO: sidebar
-    ;; TODO: blocks, blocks-location
-    (data->ops-impl db' pages nil)))
+    (cond-> []
+      pages                 (into (data->ops-impl db' pages nil))
+      ;; TODO: sidebar
+      (and pages sidebar)   []
+      (and blocks position) (into (data->ops-impl db' blocks position)))))
+
 
 
 (tests
   "two pages"
   (data->ops
-    {:athens/pages [{:page/title "p1"}
-                    {:page/title "p2"}]})
+   {:athens/pages [{:page/title "p1"}
+                   {:page/title "p2"}]})
   :=
   [#:op{:type :page/new :atomic? true :args #:page{:title "p1"}}
    #:op{:type :page/new :atomic? true :args #:page{:title "p2"}}]
 
 
-
-  #_#_#_#_
+  #_
   "two pages, one in sidebar"
-  (datascript->data
-   (db-with [{:node/title "p1"}
-             {:node/title   "p2"
-              :page/sidebar 0}]))
+
+
+  "supports missing uids"
+  (data->ops
+   {:athens/pages [{:page/title "p1"
+                    :block/children [{:block/string "b1"}]}]})
   :=
-  {:athens/pages   [{:page/title "p1"}
-                    {:page/title "p2"}]
-   :athens/sidebar ["p2"]}
+  #_:clj-kondo/ignore
+  [#:op{:type :page/new :atomic? true :args #:page{:title "p1"}}
+   #:op{:type    :block/new
+        :atomic? true
+        :args    #:block{:uid      ?uid
+                         :position {:page/title "p1" :relation :last}}}
+   #:op{:type    :block/save
+        :atomic? true
+        :args    #:block{:uid ?uid :string "b1"}}]
+
+
+  "supports blocks given position with relation"
+  (data->ops
+   {:athens/blocks [{:block/string "b1"}
+                    {:block/string "b2"}]
+    :athens/position {:page/title "p1" :relation :last}})
+  :=
+  #_:clj-kondo/ignore
+  [#:op{:type    :block/new
+        :atomic? true
+        :args    #:block{:uid      ?uid1
+                         :position {:page/title "p1" :relation :last}}}
+   #:op{:type    :block/new
+        :atomic? true
+        :args    #:block{:uid      ?uid2
+                         :position {:block/uid ?uid1 :relation :after}}}
+   #:op{:type    :block/save
+        :atomic? true
+        :args    #:block{:uid ?uid1 :string "b1"}}
+   #:op{:type    :block/save
+        :atomic? true
+        :args    #:block{:uid ?uid2 :string "b2"}}]
+
+  #_
+  "supports blocks given position without relation"
+
 
   "one page with some nested blocks"
   (data->ops
-    {:athens/pages [{:page/title "p1"
-                     :block/children
-                     [#:block{:string "b1"
-                              :uid    (uid-n 0)
-                              :children
-                              [#:block{:string "b2"
-                                       :uid    (uid-n 1)}
-                               #:block{:string "b3"
-                                       :uid    (uid-n 2)}]
-                              :named-children
-                              {"n1" #:block{:uid    (uid-n 3)
-                                            :string "b4"
-                                            :name   "n1"}}}]}]})
+   {:athens/pages [{:page/title "p1"
+                    :block/children
+                    [#:block{:string "b1"
+                             :uid    (uid-n 0)
+                             :children
+                             [#:block{:string "b2"
+                                      :uid    (uid-n 1)}
+                              #:block{:string "b3"
+                                      :uid    (uid-n 2)}]
+                             :named-children
+                             {"n1" #:block{:uid    (uid-n 3)
+                                           :string "b4"}}}]}]})
   :=
   [#:op{:type :page/new :atomic? true :args #:page{:title "p1"}}
    #:op{:type    :block/new
@@ -321,7 +375,7 @@
      {:athens/pages   []
       :athens/sidebar []}
      {:athens/blocks []
-      :athens/blocks-position
+      :athens/position
       ;; TODO: differentiate between title and other
       {:page/title "title"
        :relation   :first}})))
@@ -378,3 +432,7 @@
                             :named-children
                             {"n1" #:block{:uid    (uid-n 3)
                                           :string "b4"}}}]}]})
+
+
+(defn get-named-children-as-data
+  [db eid])

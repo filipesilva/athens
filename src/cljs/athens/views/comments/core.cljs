@@ -1,6 +1,7 @@
 (ns athens.views.comments.core
   (:require-macros [cljs.core.async.macros :refer [go]])
-  (:require [athens.views.comments.inline :as inline]
+  (:require [athens.data :as athens.data]
+            [athens.views.comments.inline :as inline]
             [athens.views.comments.right-side :as right-side]
             [athens.common-events.graph.atomic :as atomic-graph-ops]
             [athens.common-events.graph.ops :as graph-ops]
@@ -68,26 +69,83 @@
 
 
 
+(defn new-comment
+  [db thread-uid str author time]
+  (->> (athens.data/data->ops
+        {:athens/position {:block/uid thread-uid
+                           :relation  :last}
+         :athens/blocks   [{:block/string str
+                            :block/named-children
+                            {":comments/author" {:block/string author}
+                             ":comments/time"   {:block/string time}}}]}
+        :db db)
+       (composite/make-consequence-op {:op/type :new-comment})))
+
+
+(defn new-comment-thread
+  [thread-uid parent-uid]
+  (atomic-graph-ops/make-block-new-op thread-uid
+                                      {:block/uid parent-uid
+                                       :relation  {:name ":comments/thread"}}))
+
+
+(defn get-comment-thread-uid
+  [db parent-uid]
+  (-> (common-db/get-named-children db [:block/uid parent-uid])
+      (get ":comments/thread")
+      :block/uid))
+
+
+(defn block->comment-map
+  [{:block/keys [string named-children]}]
+  {:string string
+   :author (-> named-children (get ":comments/author") :block/string)
+   :time   (-> named-children (get ":comments/time") :block/string)})
+
+
+
+(defn get-thread-comments
+  [db thread-uid]
+  (->> (athens.data/get-eid-data db [:block/uid thread-uid])
+       :block/children
+       (map block->comment-map)))
+
+
+(defn has-comments?
+  [db uid]
+  (boolean (get-comment-thread-uid db uid)))
+
+
 (rf/reg-event-fx
   :comment/write-comment
   (fn [{db :db} [_ uid comment-string author]]
     (let [block                     (common-db/get-block @db/dsdb [:block/uid uid])
-          comment-block-uid         (common.utils/gen-block-uid)
-          new-comment               {:block/uid  comment-block-uid
-                                     :block/type :comment
-                                     :string      comment-string
-                                     :author      author
-                                     :time        "12:09 pm"}
-          comment-add-op            (atomic-graph-ops/make-comment-add-op uid new-comment)
-          notif-ops                 (bot/create-notifs-ops db block author bot/athens-users comment-block-uid)
+          existing-thread-uid       (get-comment-thread-uid @db/dsdb uid)
+          thread-uid                (or existing-thread-uid
+                                        (common.utils/gen-block-uid))
+          ;; notif-ops                 (bot/create-notifs-ops db block author bot/athens-users comment-block-uid)
           active-comment-ops        (composite/make-consequence-op {:op/type :active-comments-op}
-                                                                   (concat [comment-add-op]
-                                                                           ;; disabled while testing locally
-                                                                          #_ notif-ops))
+                                                                   (into (if existing-thread-uid
+                                                                           []
+                                                                           [(new-comment-thread thread-uid uid)])
+                                                                         [(new-comment @db/dsdb thread-uid comment-string author "12:09 pm")
+                                                                          ;; disabled while testing locally
+                                                                          #_ notif-ops]))
 
           event                     (common-events/build-atomic-event active-comment-ops)]
+
+
+      (println uid block)
+      (println event)
+
       {:fx [[:dispatch [:resolve-transact-forward event]]
-            [:dispatch [:prepare-message uid author :comment {:string comment-string}]]]})))
+            #_[:dispatch [:prepare-message uid author :comment {:string comment-string}]]]})))
+
+
+(println (common-db/get-block @db/dsdb [:block/uid "c5e8e8655"]))
+(println (common-db/get-named-children @db/dsdb [:block/uid "c5e8e8655"]))
+(println (get-comment-thread-uid @db/dsdb "c5e8e8655")) ;; eadbb2a55
+(println (get-thread-comments @db/dsdb "eadbb2a55"))
 
 
 (rf/reg-sub

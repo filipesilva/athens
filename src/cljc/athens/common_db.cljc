@@ -264,6 +264,7 @@
                  :block/name-refs
                  :block/_name-refs
                  :block/parent
+                 {:block/_parent [:block/uid]}
                  {:block/children [:block/uid
                                    :block/order]}]
             eid)))
